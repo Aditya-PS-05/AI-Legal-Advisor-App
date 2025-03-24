@@ -1,0 +1,85 @@
+// This is your Prisma schema file
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id            String       @id @default(uuid())
+  email         String       @unique
+  auth0Id       String       @unique
+  name          String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  collections   Collection[]
+  queries       Query[]
+}
+
+model Collection {
+  id          String     @id @default(uuid())
+  name        String
+  description String?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  userId      String
+  user        User       @relation(fields: [userId], references: [id])
+  documents   Document[]
+  vectorStore VectorStore?
+
+  @@index([userId])
+}
+
+model Document {
+  id            String        @id @default(uuid())
+  name          String
+  fileUrl       String       // URL to the stored file
+  mimeType      String
+  size          Int
+  createdAt     DateTime     @default(now())
+  collectionId  String
+  collection    Collection   @relation(fields: [collectionId], references: [id])
+  chunks        Chunk[]
+  queries       Query[]
+
+  @@index([collectionId])
+}
+
+model Chunk {
+  id          String      @id @default(uuid())
+  content     String      // The actual text content
+  pageNumber  Int?        // Optional page number for PDFs
+  embedding   Float[]     // Vector embedding of the chunk
+  documentId  String
+  document    Document    @relation(fields: [documentId], references: [id])
+  createdAt   DateTime    @default(now())
+
+  @@index([documentId])
+}
+
+model VectorStore {
+  id            String     @id @default(uuid())
+  collectionId  String     @unique
+  collection    Collection @relation(fields: [collectionId], references: [id])
+  indexName     String     // Name of the vector index in Pinecone
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+}
+
+model Query {
+  id          String    @id @default(uuid())
+  text        String    // The query text
+  response    String    // The AI response
+  createdAt   DateTime  @default(now())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+  documentId  String
+  document    Document  @relation(fields: [documentId], references: [id])
+  metadata    Json?     // Additional metadata about the query
+
+  @@index([userId])
+  @@index([documentId])
+} 
