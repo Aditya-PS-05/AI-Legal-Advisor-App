@@ -1,19 +1,14 @@
-import { makeRedirectUri } from 'expo-auth-session';
+import * as AuthSession from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { AUTH_CONFIG } from '../constants/auth';
 
 WebBrowser.maybeCompleteAuthSession();
 
-interface AuthState {
+interface AuthContextType {
   isAuthenticated: boolean;
-  accessToken: string | null;
-  user: any | null;
-  error: Error | null;
-}
-
-interface AuthContextType extends AuthState {
+  user: any;
   login: () => Promise<void>;
   logout: () => Promise<void>;
 }
@@ -21,12 +16,8 @@ interface AuthContextType extends AuthState {
 const AuthContext = createContext<AuthContextType | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<AuthState>({
-    isAuthenticated: false,
-    accessToken: null,
-    user: null,
-    error: null,
-  });
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [user, setUser] = useState(null);
 
   useEffect(() => {
     loadStoredAuth();
@@ -37,12 +28,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const token = await AsyncStorage.getItem('auth_token');
       const userStr = await AsyncStorage.getItem('auth_user');
       if (token && userStr) {
-        setState({
-          isAuthenticated: true,
-          accessToken: token,
-          user: JSON.parse(userStr),
-          error: null,
-        });
+        setIsAuthenticated(true);
+        setUser(JSON.parse(userStr));
       }
     } catch (error) {
       console.error('Error loading stored auth:', error);
@@ -51,39 +38,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = async () => {
     try {
-      const redirectUri = makeRedirectUri({
-        scheme: 'ailegaladvisor',
-        path: 'auth/callback',
+      const config: AuthSession.AuthRequestConfig = {
+        clientId: AUTH_CONFIG.clientId,
+        scopes: AUTH_CONFIG.scope.split(' '),
+        redirectUri: AUTH_CONFIG.redirectUri,
+        responseType: AuthSession.ResponseType.Token,
+        extraParams: {
+          audience: AUTH_CONFIG.audience
+        }
+      };
+
+      const authRequest = new AuthSession.AuthRequest(config);
+      const result = await authRequest.promptAsync({
+        authorizationEndpoint: `https://${AUTH_CONFIG.domain}/authorize`
       });
 
-      const authUrl = `https://${AUTH_CONFIG.domain}` +
-        `client_id=${AUTH_CONFIG.clientId}&` +
-        `redirect_uri=${encodeURIComponent(redirectUri)}&` +
-        `scope=${encodeURIComponent(AUTH_CONFIG.scope)}&` +
-        `audience=${encodeURIComponent(AUTH_CONFIG.audience)}&` +
-        'response_type=token';
-
-      const result = await WebBrowser.openAuthSessionAsync(authUrl, redirectUri);
-
-      if (result.type === 'success' && result.url) {
-        const params = new URLSearchParams(result.url.split('#')[1]);
-        const accessToken = params.get('access_token');
+      if (result.type === 'success' && result.authentication) {
+        const { accessToken } = result.authentication;
         
-        if (accessToken) {
-          const userInfo = await fetchUserInfo(accessToken);
-          await AsyncStorage.setItem('auth_token', accessToken);
-          await AsyncStorage.setItem('auth_user', JSON.stringify(userInfo));
-          
-          setState({
-            isAuthenticated: true,
-            accessToken,
-            user: userInfo,
-            error: null,
-          });
-        }
+        const userInfoResponse = await fetch(`https://${AUTH_CONFIG.domain}/userinfo`, {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+        });
+        
+        const userInfo = await userInfoResponse.json();
+        await AsyncStorage.setItem('auth_token', accessToken);
+        await AsyncStorage.setItem('auth_user', JSON.stringify(userInfo));
+
+        setIsAuthenticated(true);
+        setUser(userInfo);
       }
     } catch (error) {
-      setState(prev => ({ ...prev, error: error as Error }));
+      console.error('Login error:', error);
     }
   };
 
@@ -91,35 +78,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       await AsyncStorage.removeItem('auth_token');
       await AsyncStorage.removeItem('auth_user');
-      
-      const logoutUrl = `https://${AUTH_CONFIG.domain}/v2/logout?` +
-        `client_id=${AUTH_CONFIG.clientId}&` +
-        `returnTo=${encodeURIComponent(AUTH_CONFIG.logoutUri)}`;
-      
-      await WebBrowser.openBrowserAsync(logoutUrl);
-      
-      setState({
-        isAuthenticated: false,
-        accessToken: null,
-        user: null,
-        error: null,
-      });
+      setIsAuthenticated(false);
+      setUser(null);
     } catch (error) {
-      setState(prev => ({ ...prev, error: error as Error }));
+      console.error('Logout error:', error);
     }
   };
 
-  const fetchUserInfo = async (token: string) => {
-    const response = await fetch(`https://${AUTH_CONFIG.domain}/userinfo`, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    });
-    return response.json();
-  };
-
   return (
-    <AuthContext.Provider value={{ ...state, login, logout }}>
+    <AuthContext.Provider value={{ isAuthenticated, user, login, logout }}>
       {children}
     </AuthContext.Provider>
   );
@@ -131,4 +98,4 @@ export function useAuth() {
     throw new Error('useAuth must be used within an AuthProvider');
   }
   return context;
-} 
+}
